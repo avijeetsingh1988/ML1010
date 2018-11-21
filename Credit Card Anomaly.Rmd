@@ -1,0 +1,731 @@
+---
+title: "Clustering Algorithm for Unupervised Learning - Credit Card Client Anomaly Analysis"
+author: "Tyler Blakeley, Benjamin Kan, Mohammad Islam, Avijeet Singh"
+date: "October 29 2018"
+output:
+  html_document:
+    fig_height: 4.5
+    fig_width: 7
+    highlight: tango
+    number_sections: yes
+    theme: readable
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+# Business Understanding
+We work at the Retail Credit Risk Analytics department at the Bank of Taiwan. Recently, there have been increasing credit card debt defaults in our bank. Senior Management would like our department to develop a machine learning algorithm to find anomalies in the data that we hope will show early warning signs of default. This will allow the Retail Credit Risk and Collections departments to act early by reducing these cleints' credit card limits to minimize the losses. We would also like to find out which demographics are in the anomaly group which would indicate high susceptiblility of defaults. The Management instructed us to use data from the third parties to build the algorithms as proof-of-concepts before we use our own data. They would also like us to build a user-friendly app to allow them to load in the dataset and identify clients that are in the anomaly group which may indicate high risk of defaulting on their credit card debts.        
+
+# Data Understanding
+
+## Data Source and Collection
+We sourced the third party credit card data from Kaggle (https://www.kaggle.com/uciml/default-of-credit-card-clients-dataset). This dataset contains information on default payments, demographic factors, credit data, history of payment, and bill statements of credit card clients in Taiwan from April 2005 to September 2005. As mentioned above, the goal is to identify a group of customers who have high default risks. 
+
+## Data Description
+In the dataset, there are 25 variables:
+
+Variable Name              | Description
+---------------------------|--------------------------------------------------------------------------------
+ID                         | ID of each client
+LIMIT_BAL                  | Amount of given credit in NT dollars (includes individual and                                               | family/supplementary credit
+SEX                        | Gender (1=male, 2=female)
+EDUCATION                  | (1=graduate school, 2=university, 3=high school, 4=others, 5=unknown, 6=unknown)
+MARRIAGE                   | Marital status (1=married, 2=single, 3=others)
+AGE                        | Age in years
+PAY_0                      | Repayment status in September, 2005 (-1=pay duly, 1=payment delay for one month,                            | 2=payment delay for two months, ... 8=payment delay for eight months, 9=payment                             | delay fornine months and above)                 
+PAY_2                      | Repayment status in August, 2005 (scale same as above)
+PAY_3                      | Repayment status in July, 2005 (scale same as above)
+PAY_4                      | Repayment status in June, 2005 (scale same as above)
+PAY_5                      | Repayment status in May, 2005 (scale same as above)
+PAY_6                      | Repayment status in April, 2005 (scale same as above)
+BILL_AMT1                  | Amount of bill statement in September, 2005 (NT dollar)
+BILL_AMT2                  | Amount of bill statement in August, 2005 (NT dollar)
+BILL_AMT3                  | Amount of bill statement in July, 2005 (NT dollar)
+BILL_AMT4                  | Amount of bill statement in June, 2005 (NT dollar)
+BILL_AMT5                  | Amount of bill statement in May, 2005 (NT dollar)
+BILL_AMT6                  | Amount of bill statement in April, 2005 (NT dollar)
+PAY_AMT1                   | Amount of previous payment in September, 2005 (NT dollar)
+PAY_AMT2                   | Amount of previous payment in August, 2005 (NT dollar)
+PAY_AMT3                   | Amount of previous payment in July, 2005 (NT dollar)
+PAY_AMT4                   | Amount of previous payment in June, 2005 (NT dollar)
+PAY_AMT5                   | Amount of previous payment in May, 2005 (NT dollar)
+PAY_AMT6                   | Amount of previous payment in April, 2005 (NT dollar)
+default.payment.next.month | Default payment (1=yes, 0=no)
+
+## Data Exploration
+
+### Load Packages
+```{r, message=FALSE,warning=FALSE}
+#import packages;
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(Hmisc)
+library(corrplot)
+library(mice)
+library(VIM)
+library(pROC)
+library(caret)
+library(corrgram)
+library(GGally)
+library(ggthemes) 
+library(DMwR)
+library(gridExtra)
+library(rattle)
+library(readxl)
+library(grid)
+library(gridExtra)
+```
+### Load Datasets
+Now that the packages are loaded,we can load in the dataset.
+
+```{r, message=FALSE}
+data = read.csv("C:/Users/avije/Documents/GitHub/TeamBlueAssignment-2/default of credit card clients.csv", na = "NA",header=T)
+```
+
+Now lets look at the structure of the data.
+
+```{r, message=FALSE}
+str(data)
+```
+
+We've got a sense of our variables, their class type, and the first few observations of each. We know we're working with 30001 observations of 25 variables.
+
+### Feature Engineering
+
+Upon initial inspection of the data, we found that the data we are working with is labelled as we have the column "default.payment.next.month". 
+But for our assignment we need unlabelled data and we have decided to remove this column.
+We will also remove the first column as we dont really need the IDs.
+```{r, message=FALSE}
+# removing the first and last coulmn .
+data<-data[,-1]
+data<-data[,-25]
+str(data)
+```
+As we can see the last column is successfully removed and now we have unlabelled data.
+
+Also we reckon that converting the variable SEX into M & F would be easier to understand instead of "1" and "2" respectively, so we replace them.
+
+```{r, message=FALSE,warning=FALSE}
+data$SEX<-ifelse(data$SEX==1,"M","F")
+```
+
+Lastly,we can see that the attributes('SEX','EDUCATION','MARRIAGE','PAY_0','PAY_2','PAY_3','PAY_4','PAY_5','PAY_6') are all categorical variables so we convert them into factors
+
+```{r, message=FALSE,warning=FALSE}
+factor_VARS <- c('SEX','EDUCATION','MARRIAGE','PAY_0','PAY_2','PAY_3','PAY_4','PAY_5','PAY_6')
+data[factor_VARS]<- lapply(data[factor_VARS],function(x) as.factor(x))
+```
+
+Before we dig into data exploration, let us see what our data looks like now after all the changes.
+
+```{r, message=FALSE,warning=FALSE}
+str(data)
+```
+
+###Data Analysis
+Now we explore the data. We can divide it into two categories:
+* Categorical Features
+* Numerical Features
+
+####Categorical Features
+Let us visualize the categorical data.
+
+#####SEX,EDUCATION,MARRIAGE
+```{r, message=FALSE,warning=FALSE}
+p1 = ggplot(data,aes(data$SEX))+geom_bar(fill="steelblue")+scale_x_discrete("Sex")+scale_y_continuous("No. of Observations")
+p2 = ggplot(data,aes(data$EDUCATION))+geom_bar(fill="steelblue")+scale_x_discrete("Education")+scale_y_continuous("No. of Observations")
+p3 = ggplot(data,aes(data$MARRIAGE))+geom_bar(fill="steelblue")+scale_x_discrete("Marriage")+scale_y_continuous("No. of Observations")
+grid.arrange(p1,p2,p3,nrow = 2)
+```
+
+From the above graphs we made the following observations:
+1. The number of females are more in the dataset as compared to number of males.
+2. There are some values at "0" for the attributes Education and Marriage.
+
+#####Pay Status
+According to the description, PAY_x is a set of categorical variables with the levels:
+-1=pay duly, 1=payment delay for one month, 2=payment delay for two months,...8= payment delay for 8 months and 9=payment delay for 9 months and above.
+```{r, message=FALSE,warning=FALSE}
+p4 = ggplot(data,aes(data$PAY_0))+geom_bar(fill="steelblue")+scale_x_discrete("Payment Status for PAY_0")+scale_y_continuous("No. of Observations")
+p5 = ggplot(data,aes(data$PAY_2))+geom_bar(fill="steelblue")+scale_x_discrete("Payment Status for PAY_2")+scale_y_continuous("No. of Observations")
+p6 = ggplot(data,aes(data$PAY_3))+geom_bar(fill="steelblue")+scale_x_discrete("Payment Status for PAY_3")+scale_y_continuous("No. of Observations")
+p7 = ggplot(data,aes(data$PAY_4))+geom_bar(fill="steelblue")+scale_x_discrete("Payment Status for PAY_4")+scale_y_continuous("No. of Observations")
+p8 = ggplot(data,aes(data$PAY_5))+geom_bar(fill="steelblue")+scale_x_discrete("Payment Status for PAY_5")+scale_y_continuous("No. of Observations")
+p9 = ggplot(data,aes(data$PAY_6))+geom_bar(fill="steelblue")+scale_x_discrete("Payment Status for PAY_6")+scale_y_continuous("No. of Observations")
+grid.arrange(p4,p5,p6,p7,p8,p9,nrow = 2)
+```
+
+From the above graphs we made the following observation(s):
+We observed undocumented values for the PAY attributes i.e "0" &"-2"
+On going through the discussions where the dataset was taken from we found that infact these values have the following meaning.
+-2 = No consumption
+0  = The use of revolving credit card.
+So from here we found out that there are high number of observations where people are using revolving credit card.
+Source:
+https://www.kaggle.com/uciml/default-of-credit-card-clients-dataset/discussion/34608 
+
+####Numerical Features
+
+#####Age
+```{r, message=FALSE,warning=FALSE}
+p10 = ggplot(data, aes(data$AGE)) + geom_histogram(binwidth = 1,colour="black",fill="white")+  scale_x_continuous("Age")+scale_y_continuous("Observations Count")+labs(title = "Histogram")
+p11 = ggplot(data, aes(,data$AGE)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("Age")+scale_x_continuous("")+labs(title="Boxplot")
+grid.arrange(p10,p11,nrow =1,top="AGE DISTRIBUTION AND OUTLIERS" )
+```
+
+#####Bill Amount
+Lets explore the distribution and the outliers for BILL_AMTX. The document describes these attributes as follows:
+
+BILL_AMT1                  | Amount of bill statement in September, 2005 (NT dollar)
+BILL_AMT2                  | Amount of bill statement in August, 2005 (NT dollar)
+BILL_AMT3                  | Amount of bill statement in July, 2005 (NT dollar)
+BILL_AMT4                  | Amount of bill statement in June, 2005 (NT dollar)
+BILL_AMT5                  | Amount of bill statement in May, 2005 (NT dollar)
+BILL_AMT6                  | Amount of bill statement in April, 2005 (NT dollar)
+
+```{r, message=FALSE,warning=FALSE}
+p12 = ggplot(data, aes(data$BILL_AMT1)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("BILL_AMT1")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p13 = ggplot(data, aes(data$BILL_AMT2)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("BILL_AMT2")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p14 = ggplot(data, aes(data$BILL_AMT3)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("BILL_AMT3")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p15 = ggplot(data, aes(data$BILL_AMT4)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("BILL_AMT4")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p16 = ggplot(data, aes(data$BILL_AMT5)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("BILL_AMT5")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p17 = ggplot(data, aes(data$BILL_AMT6)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("BILL_AMT6")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+grid.arrange(p12,p13,p14,p15,p16,p17,nrow =3,top="BILL_AMTX DISTRIBUTION" )
+
+```
+
+Now we have seen the distribution, lets check for outliers:
+
+```{r, message=FALSE,warning=FALSE}
+p18 = ggplot(data, aes(,data$BILL_AMT1)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("BILL_AMT1")+scale_x_continuous("")+labs(title="Boxplot")
+p19 = ggplot(data, aes(,data$BILL_AMT2)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("BILL_AMT2")+scale_x_continuous("")+labs(title="Boxplot")
+p20 = ggplot(data, aes(,data$BILL_AMT3)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("BILL_AMT3")+scale_x_continuous("")+labs(title="Boxplot")
+p21 = ggplot(data, aes(,data$BILL_AMT4)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("BILL_AMT4")+scale_x_continuous("")+labs(title="Boxplot")
+p22 = ggplot(data, aes(,data$BILL_AMT5)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("BILL_AMT5")+scale_x_continuous("")+labs(title="Boxplot")
+p23 = ggplot(data, aes(,data$BILL_AMT6)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("BILL_AMT6")+scale_x_continuous("")+labs(title="Boxplot")
+grid.arrange(p18,p19,p20,p21,p22,p23,nrow =3,top="OUTLIERS for BILL_AMTX" )
+```
+
+
+#####Pay Amount
+Lets explore the distribution and the outliers for PAY_AMTX. The document describes these attributes as follows:
+
+PAY_AMT1                   | Amount of previous payment in September, 2005 (NT dollar)
+PAY_AMT2                   | Amount of previous payment in August, 2005 (NT dollar)
+PAY_AMT3                   | Amount of previous payment in July, 2005 (NT dollar)
+PAY_AMT4                   | Amount of previous payment in June, 2005 (NT dollar)
+PAY_AMT5                   | Amount of previous payment in May, 2005 (NT dollar)
+PAY_AMT6                   | Amount of previous payment in April, 2005 (NT dollar)
+
+```{r, message=FALSE,warning=FALSE}
+p24 = ggplot(data, aes(data$PAY_AMT1)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("PAY_AMT1")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p25 = ggplot(data, aes(data$PAY_AMT2)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("PAY_AMT2")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p26 = ggplot(data, aes(data$PAY_AMT3)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("PAY_AMT3")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p27 = ggplot(data, aes(data$PAY_AMT4)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("PAY_AMT4")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p28 = ggplot(data, aes(data$PAY_AMT5)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("PAY_AMT5")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+p29 = ggplot(data, aes(data$PAY_AMT6)) + geom_histogram(binwidth = 5000,colour="black",fill="white")+  scale_x_continuous("PAY_AMT6")+scale_y_continuous("Obs.")+labs(title = "Histogram")
+grid.arrange(p24,p25,p26,p27,p28,p29,nrow =3,top="PAY_AMTX DISTRIBUTION" )
+
+```
+
+Now we have seen the distribution, lets check for outliers:
+
+```{r, message=FALSE,warning=FALSE}
+p30 = ggplot(data, aes(,data$PAY_AMT1)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("PAY_AMT1")+scale_x_continuous("")+labs(title="Boxplot")
+p31 = ggplot(data, aes(,data$PAY_AMT2)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("PAY_AMT2")+scale_x_continuous("")+labs(title="Boxplot")
+p32 = ggplot(data, aes(,data$PAY_AMT3)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("PAY_AMT3")+scale_x_continuous("")+labs(title="Boxplot")
+p33 = ggplot(data, aes(,data$PAY_AMT4)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("PAYL_AMT4")+scale_x_continuous("")+labs(title="Boxplot")
+p34 = ggplot(data, aes(,data$PAYL_AMT5)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("PAY_AMT5")+scale_x_continuous("")+labs(title="Boxplot")
+p35 = ggplot(data, aes(,data$PAY_AMT6)) + geom_boxplot(fill = "white")+
+  scale_y_continuous("PAY_AMT6")+scale_x_continuous("")+labs(title="Boxplot")
+grid.arrange(p30,p31,p32,p33,p34,p35,nrow =3,top="OUTLIERS for PAY_AMTX" )
+```
+
+
+```{r, message=FALSE,warning=FALSE}
+freq_xtab_sex=xtabs(~SEX+TARGET)
+barplot(freq_xtab_sex, legend=rownames(freq_xtab_sex), ylab="Number of People", xlab="Target", col=c("pink","navyblue"), beside=T, las=1)
+```
+
+The graph above shows that higher proportion of males was diagnosed with the heart disease.
+
+#####CP(Chest Pain)
+```{r, message=FALSE,warning=FALSE}
+freq_tbl_CP=table(CP)
+barplot(freq_tbl_CP,xlab = "Chest Pain Type", ylab = "Number of Patients",main = "Bar chart of Chest Pain",col=c("green","yellow","purple","red"))
+```
+
+From the plot it is evident that there is more number of patients with CP Type 4 (Asymptomatic).
+
+Now lets look at CP against our Target Variable.
+
+```{r, message=FALSE,warning=FALSE}
+freq_xtab_CP=xtabs(~CP+TARGET)
+barplot(freq_xtab_CP, legend=rownames(freq_xtab_CP), ylab="Patients", xlab="Target", col=c("green","yellow","purple","red"), beside=T, las=1)
+```
+
+From the plot above, we can see that patients with CP (Chest Paint Type) 4 is more prone to have heart disease.
+
+#####FBS(Fasting Blood Sugar)
+We have more number of patients with low blood sugar i.e. <120mg/L as we can see from the following plot.
+
+```{r, message=FALSE,warning=FALSE}
+freq_tbl_FBS=table(FBS)
+barplot(freq_tbl_FBS,xlab = "Fasting Blood Sugar(FBS)", ylab = "Number of Patients",main = "Bar chart of FBS",col=c("purple","yellow"))
+
+```
+
+Now lets plot it with respect to our target variable.
+
+```{r, message=FALSE,warning=FALSE}
+freq_xtab_FBS=xtabs(~FBS+TARGET)
+barplot(freq_xtab_FBS, legend=rownames(freq_xtab_FBS), ylab="Number of People", xlab="Target", col=c("purple","yellow"), beside=T, las=1)
+```
+
+The plot did not change much when the data was divided based on the presence of the heart disease although patients diagnosed with heart disease exhibited a slighlty higher level of blood sugar.
+
+#####Rest ECG
+
+```{r, message=FALSE,warning=FALSE}
+freq_tbl_RESTECG=table(RESTECG)
+barplot(freq_tbl_RESTECG,xlab = "RESTECG", ylab = "Number of Patients",main = "Bar chart of RESTECG",col=c("green","purple","yellow"))
+```
+
+0-Normal
+1-abnormal
+2-Hypertrophy
+
+Now lets compare with our TARGET
+
+```{r, message=FALSE,warning=FALSE}
+freq_xtab_RESTECG=xtabs(~RESTECG+TARGET)
+barplot(freq_xtab_RESTECG, legend=rownames(freq_xtab_RESTECG), ylab="Number of People", xlab="Target", col=c("green","purple","yellow"), beside=T, las=1)
+```
+
+Most patients exhibited normal RESTECG results. However, a higher proportion of diseased patients had abnormal ST wave patterns suggesting that this feature may contribute some predictive power.
+
+#####EXANG - Exercise Induced Angina.
+
+We can see from the following plot that there is more noumber of individuals who do not have exercise induced angina.
+
+```{r, message=FALSE,warning=FALSE}
+freq_tbl_EXANG=table(EXANG)
+barplot(freq_tbl_EXANG,xlab = "EXANG", ylab = "Number of Patients",main = "Bar chart of EXANG",col=c("green","purple","yellow"))
+```
+
+Let us compare with our TARGET.
+
+```{r, message=FALSE,warning=FALSE}
+freq_xtab_EXANG=xtabs(~EXANG+TARGET)
+barplot(freq_xtab_EXANG, legend=rownames(freq_xtab_EXANG), ylab="Number of People", xlab="Target", col=c("green","purple"), beside=T, las=1)
+```
+In the number of individuals diagnosed with the heart disease most of them had exercise induced angina.
+This is a strong predictive attribute.
+
+We will stop here as the remaining factor attributes have a lot of missing values.
+
+####Numeric Features
+
+#####Age
+
+Let us plot a histogram to see the distribution of ages.
+
+```{r, message=FALSE,warning=FALSE}
+hist(full_data$AGE,main = "Distribution of Age",xlab = "Age",ylab = "Number of People")
+```
+
+Now lets see the age distribution according to our Target.
+
+```{r, message=FALSE,warning=FALSE}
+ggplot(full_data, aes(AGE, fill = TARGET)) + 
+  geom_histogram() + 
+  theme_few()
+```
+
+We can see that the individuals diagnosed with heart disease have a slightly higher age.
+
+#####TRSETBPS(Resting Blood Pressure (in mm Hg on admission to the hospital))
+
+Let us check the distribution of TRESTBPS
+
+```{r, message=FALSE,warning=FALSE}
+hist(full_data$TRESTBPS,main = "Distribution of TRESTBPS",xlab = "TRESTBPS",ylab = "Number of People")
+```
+```{r, message=FALSE,warning=FALSE}
+ggplot(full_data, aes(TRESTBPS, fill = TARGET)) + 
+  geom_histogram() + 
+  theme_few()
+```
+
+We can see higher the TRESTBPS, higher are the chances of getting diagnosed with the heart disease.
+Now let us check the outliers in TRESTBPS.
+
+```{r, message=FALSE,warning=FALSE}
+boxplot(full_data$TRESTBPS,ylab='Resting blood pressure',main='Boxplot distribution of TRESTBPS')
+```
+
+#####CHOL(Serum Cholestoral in mg/dl)
+
+Let us check the distribution of TRESTBPS VS TARGET
+
+```{r, message=FALSE,warning=FALSE}
+ggplot(full_data, aes(CHOL, fill = TARGET)) + 
+  geom_histogram() + 
+  theme_few()
+```
+
+Box plot for cholestrol.
+
+```{r, message=FALSE,warning=FALSE}
+boxplot(full_data$CHOL,ylab='Cholestrol',main='Boxplot distribution of CHOL')
+```
+
+#####THALACH(Maximum Heart Rate Achieved)
+
+```{r, message=FALSE,warning=FALSE}
+ggplot(full_data, aes(THALACH, fill = TARGET)) + 
+  geom_histogram() + 
+  theme_few()
+```
+
+This shows that the maximum heart rate was higher for the non-diseased individuals as compared to the diseased individuals.
+
+Lets check for outliers in this group.
+
+```{r, message=FALSE,warning=FALSE}
+boxplot(full_data$THALACH,ylab='Maximum heart rate',main='Boxplot distribution of THALACH')
+```
+
+#####OLDPEAK(ST Depression Induced by Exercise Relative to Rest)
+
+Let us check the distribution of OLDPEAK VS TARGET
+
+```{r, message=FALSE,warning=FALSE}
+ggplot(full_data, aes(OLDPEAK, fill = TARGET)) + 
+  geom_histogram() + 
+  theme_few()
+```
+
+We can see that higher the value for OLDPEAK there are more chances of the individual to be diagnosed with heart disease.
+
+Now lets check for outliers.
+
+```{r, message=FALSE,warning=FALSE}
+boxplot(full_data$OLDPEAK,ylab='ST Depression Induced by Exercise Relative to Rest',main='Boxplot distribution of OLDPEAK')
+```
+
+We would like to find out if there are any relationships among the numerical variables. We are using the GGPAIRS plot:
+
+```{r, message=FALSE,warning=FALSE}
+ggpairs(full_data[, !names(full_data)%in% factor_VARS])
+
+```
+
+Interestingly, the correlations among the numerical variables are not as strong. And this shows in the scatter plots.
+
+## Data Quality Verification
+
+### Missing Data
+
+First let us summarize the data and see how it looks like.
+
+```{r, message=FALSE,warning=FALSE}
+summary(full_data)
+```
+
+We now visualize the missing data through a histogram.
+
+```{r, message=FALSE,warning=FALSE}
+aggr_plot = aggr(full_data, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(full_data), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+```
+
+As we analyze all the variables, we found some attribute with substantial missing values.  There was a couple of variables that caught our attention where varable **CA**  with `r round(sum(is.na(full_data$CA)) / nrow(full_data)*100)` % missing data, **SLOPE** with `r round(sum(is.na(full_data$SLOPE)) / nrow(full_data)*100)` % missing data and **THAL** with `r round(sum(is.na(full_data$THAL)) / nrow(full_data)*100)` % missing data.  
+
+Other attributes have missing data as well but the issue is not as severe. We will deal with these under the Data Preparation section separately.
+
+### Outliers
+
+Based on the boxplots above, we found that there are zero values for the cholesterol level and resting blood pressure. These observations are not physically possible they don't make sense. We will treat these under the Data Preparation section. 
+
+# Data Preparation
+
+Now that we are done with data exploration we can move on to data preparation.
+
+## Attributes with High Percentage of Missing Data
+
+As mentioned above, there are three varibales which have a high percent of missing data. We chose to remove them so that they won't distort our prediction model.
+
+```{r, message=FALSE,warning=FALSE} 
+full_data_truncated<-as.data.frame(full_data[, !names(full_data) %in% c("THAL","CA","SLOPE")])
+summary(full_data_truncated)
+``` 
+
+## Zero Values for Cholesteral and Resting Blood Pressure Measurements
+
+We assume that zero cholesteral and resting blood pressure values are erroneous so we will treat them as missing:
+
+```{r, message=FALSE,warning=FALSE}
+full_data_truncated$CHOL[full_data_truncated$CHOL == 0] <- NA
+full_data_truncated$TRESTBPS[full_data_truncated$TRESTBPS == 0] <- NA
+```
+
+## Missing Value Imputations
+
+We decided to implement a K-neareast neighbour (KNN) algorithm to impute missing values. We chose this method because it works well with both categorical and continous variables. KNN works by imputing the value based on the majority votes of K nearest neighbours.  To find the nearest neighbours we use a distance function (Euclidean Distance) for continous variables. For our continuous variables we need to ensure that they are distributed on the same ranges. We do this by telling the algorithm to re-scale all our variables to the same scale. For categorical variables, we use Hamming distance.  We chose K to be an odd number as this will avoid ties in the voting process.
+
+After implementing KNN we check to see if the correalation between all the variables has shifted at all.  The correlation should not change after imputation and the graph corrgrams show this.
+
+
+```{r, message=FALSE,warning=FALSE,fig.show='hold',fig.width=3, fig.height=3}
+#Impute missing values using KNN algorithm,remove TARGET variable from KNN
+knn_input=as.data.frame(full_data_truncated[, !names(full_data_truncated) %in% c("TARGET")])
+#Confrim structure hasnot changed except for lost of target variable
+str(knn_input)
+
+#Allow for reproducable results
+set.seed(847593)
+
+#Run KNN imputation, use built in scacle = T to rescale all data.  
+knnOutput = knnImputation(knn_input, k=7,scale=T)
+
+#Check if all missing values have been imputeted
+summary(knnOutput)
+
+aggr_plot = aggr(knnOutput, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(full_data), cex.axis=.7, gap=3, ylab=c("Missing data after KNN","Pattern"))
+
+#add target back to imputated data
+knnOutput$TARGET <- full_data$TARGET
+#Compare before and after correlation
+corr1 <- corrgram(full_data_truncated, order=NULL, panel=panel.shade, text.panel=panel.txt,
+main="Correlogram Before Imputation")
+corr2 <- corrgram(knnOutput, order=NULL, panel=panel.shade, text.panel=panel.txt,
+main="Correlogram After Imputation")
+
+```
+
+
+We can see that all the missing data has now been imputed and the correlations between the variables have not been shifted due to the imputed data.
+
+# Modelling
+
+## Select Modelling Technique
+
+We now have the data ready to predict our target variable (Diagnosis of Heart Disease 0: < 50% diameter narrowing; 1: > 50% diameter narrowing).  We chose to start with a Decision Tree classification model as they are very intuitive and easy to interpret.  A decision tree works by creating a tree like graph based on differenct variable splits.  These splits are made by evaluating the entropy and Information Gain of each variable split of the data. We evaluate all splits to find the best one that reduces the entropy (messiness) and returns the highest infomration gained. This is recursively run until all data is classified or a stopping criteria is met.
+
+## Split into Training & Test Sets
+
+```{r, message=FALSE,warning=FALSE}
+#set.seed(456292)
+
+#Create index to split data
+train_set <- createDataPartition(knnOutput$TARGET, p = 0.8, list = FALSE)
+str(train_set)
+
+#Check distribution of target variable in train set and test set
+prop.table(table(knnOutput$TARGET[train_set]))
+prop.table(table(knnOutput$TARGET[-train_set]))
+prop.table(table(knnOutput$TARGET))
+
+#Create train and test data
+train_data <- knnOutput[train_set,]
+test_data <- knnOutput[-train_set,]
+
+```
+
+We split the data into 80% training data and 20% testing data, the data is balanced on the Target variable to ensure it is representative of the initial data set.
+
+## Build Model 
+```{r, message=FALSE,warning=FALSE}
+#Find Optimal Parameters for Decision Tree Model and reduce bias using cross validation
+folds=10
+
+fitControl <- trainControl(method="cv",number=folds)
+
+#Implement Decision Tree model 
+DT_model <- train(factor(TARGET)~., data=train_data, method="rpart",tuneLength = 50, 
+metric = "Accuracy",
+trControl = fitControl)
+
+```
+
+We implemented K fold cross validation with 10 folds to find our optimal parameters for the desicion tree model.  The optimal parameters for our data was with a complexity parameter of `r DT_model$finalModel$tuneValue`.  By using K fold cross validation we are able to reduce overfitting and selection bias of the model to our training data.  The cross validation splits the data in 10 folds and creates a model using 9 folds as the training set, and the other fold as the test set.  It repeats this process for each different fold and the validation results are combined(average) from all models to create the final model.
+
+## Assess Model
+
+### Accuracy
+
+```{r, message=FALSE,warning=FALSE}
+print(DT_model)
+# Predict Test results
+DT_model.pred <- predict(DT_model, test_data)
+# Check Accuracy of Model 
+confus <- confusionMatrix(DT_model.pred,factor(test_data$TARGET))
+
+confus
+# Plot Decision Tree
+fancyRpartPlot(DT_model$finalModel)
+
+```
+
+The Decision tree model we created had a `r round(confus$overall[1]*100,2)` % accuracy.  We were significanly better at predicting if the TARGET value 1: > 50% diameter narrowing, we were correct `r round(confus$byClass[2]*100,2)` % of the time.  One downside to having a high % of predictor TARGET 1, is that also classified a lot of false negatives.  Of test data that was 0: < 50% diameter narrowing, `r 100-round(confus$byClass[[1]]*100,2)` was incorrectly classified as 1: > 50% diameter narrowing.
+
+### Variable importance
+
+Let's look at relative variable importance of each variable
+
+```{r, message=FALSE, warning=FALSE}
+# Get importance
+importance    <- varImp(DT_model)
+
+ggplot(importance)
+
+
+```
+
+The most importance variable for prediction our Target are THALACH (Maximum Heart Rate Achieved), EXANG with value 1(Exercise Induced Angina), OLDPEAK (ST Depression Induced by Exercise Relative to Rest), CP with value 4(Chest Pain Type 4:Asymptomatic), and CP with value 2 (Chest Pain Type 2:atypical angina).
+
+## Additional Model
+
+Even though we used cross validation in our analysis, our decision tree model could still suffer from overfitting. One way to reduce overfitting more is to use an ensemble of decision trees called a Random Forest Model.  The Random Forest model adds more randomness to the model by creating many different decision trees and instead of choosing the best variable to split on from all variables, we only look at a subset of all variables for each split.  Once all the trees are created, the final classifier is chosen from the mode of all the trees( Ex: if 10 trees output 1 and 5 tree output 0, then the final model would output 1). The downside to Random Forest to Decision Trees is it is more computational intensive, but our dataset is small enough that it doesn't affect it much.
+
+### Tuning Random Forest
+
+```{r, message=FALSE,warning=FALSE}
+
+
+##Find Optimal number of random variables to select at each split
+
+bestmtry <- tuneRF(train_data[,1:10], train_data$TARGET, stepFactor=1.5, improve=1e-5, ntree=500,doBest = TRUE)
+tunegrid <- expand.grid(.mtry=bestmtry$mtry)
+
+#Create random forest model using optional parameters and cross validation
+RF_model <- train(factor(TARGET)~., data=train_data, method="rf",tuneGrid=tunegrid,tuneLength = 50,
+metric = "Accuracy",
+trControl = fitControl)
+
+print(RF_model)
+
+
+```
+Using the function we were able to find the optimal number of random variables to select at each split.  The optimal number was `r bestmtry$mtry`
+
+### Accuracy
+
+```{r, message=FALSE,warning=FALSE}
+print(RF_model)
+# Predict Test results
+RF_model.pred <- predict(RF_model, test_data)
+# Check Accuracy of Model 
+RF_confus <- confusionMatrix(RF_model.pred,factor(test_data$TARGET))
+
+RF_confus
+# Plot Random Forest error
+plot(RF_model$finalModel)
+
+```
+
+The Random Forest with 500 trees and mtry of`r bestmtry$mtry` had a overall accuracy of  `r round(RF_confus$overall[1]*100,2)` compared to the decision tree model of `r round(confus$overall[1]*100,2)`.  Like the decision tree model the random forest is better at accurately classify target values of 1.  In the above graph the green line shows the error on the TARGET value of 1, the red line shows the error of classify Target value of 0 and the black line shows the Out of bag error of the random forest.  From the chart it looks like the error has converged at around 200 trees, but it does look like it is starting to coverge again around 400 trees. What would happen if we were to add more trees?
+
+### Find Optimal Tree
+
+```{r, message=FALSE,warning=FALSE,tidy=TRUE}
+control <- trainControl(method="repeatedcv", number=10, repeats=3, search="grid")
+
+modellist <- list()
+# loop to iterate through random forest models with different number of trees
+for (ntree in c(200,1000, 1500, 2000)) {
+fit <- train(factor(TARGET)~., data=train_data, method="rf", metric="Accuracy", tuneGrid=tunegrid,tuneLength = 50, trControl=control, ntree=ntree)
+key <- toString(ntree)
+modellist[[key]] <- fit
+}
+# compare results of all models (1000,1500 and 2000 trees)
+results <- resamples(modellist)
+summary(results)
+
+# Predict Test results 100 Trees
+RF200_model.pred <- predict(modellist$`200`, test_data)
+
+# Check Accuracy of Model 
+RF200_confus <- confusionMatrix(factor(RF200_model.pred),factor(test_data$TARGET))
+
+# Predict Test results 1000 Trees
+RF1000_model.pred <- predict(modellist$`1000`, test_data)
+
+# Check Accuracy of Model 
+RF1000_confus <- confusionMatrix(factor(RF1000_model.pred),factor(test_data$TARGET))
+
+# Predict Test results 1500 Trees
+RF2000_model.pred <- predict(modellist$`2000`, test_data)
+
+# Check Accuracy of Model 
+RF2000_confus <- confusionMatrix(factor(RF2000_model.pred),factor(test_data$TARGET))
+
+# Predict Test results 2000 Trees
+RF1500_model.pred <- predict(modellist$`1500`, test_data)
+
+# Check Accuracy of Model 
+RF1500_confus <- confusionMatrix(factor(RF1500_model.pred),factor(test_data$TARGET))
+
+#Compare accuracy across all models created
+pred_table <- data.table(Model = c("Decision Tree","Random Forest 200 Trees","Random Forest 500 Trees","Random Forest 1000 Tress","Random Forest 1500 Trees","Random Forest 2000 Trees"),Accuracy = c(confus$overall[1],RF200_confus$overall[1],RF_confus$overall[1],RF1000_confus$overall[1],RF1500_confus$overall[1],RF2000_confus$overall[1]))
+
+pred_table
+
+```
+
+We ran the Random forest (RF) model with 200, 1000, 1500 and 2000 trees and compared there accuracy to our RF model with 500 trees and the Decision tree model. We can see the best model was the random forest with 1500 trees. This had an accuracy of `r round(RF1500_confus$overall[1]*100,2)`
+
+
+# Evaluation
+
+In summary, we have tried various models and tuning parameters and below summarizes the prediction accuracies:
+
+Model         | Prediction Accuracy
+--------------|---------------------
+Decision Tree | 73.8%
+RF 200        | 80.8%
+RF 500        | 80.3%
+RF 1000       | 80.3%
+RF 1500       | 80.9%
+RF 2000       | 80.3%
+
+From the results above, we have the following observations:
+
+* The random forest model is superior to the decision tree model as it is an ensemble model.
+* For random forest, the errors converge fairly quickly starting at 100 trees. So the accuracy didn't improve further with the number of trees greater than 100. 
+
+We reckon that 80% of prediction accuracy would provide a good foundation for further studies with the goal to use the model for clinical studies.
+
+Futhermore, we found that the top 3 important measurements which could determine the heart disease diagnosis is as follows:
+
+* THALACH (Maximum Heart Rate Achieved)
+* EXANG (Exercise Induced Angina)
+* OLDPEAK (ST Depression Induced by Exercise Relative to Rest)
+
+Based on these findings, we will recommend Peter Munk to allocate more budget to improve the facilities and apparatus which are used to measure these attributes.
+
+##Next Steps
+
+The next step would be to try and acquire more data to train the model on.  Another step would be to try other classification models that do not use decision trees.  We could try Support Vector machines or Logistic Regression.
+
+
+# Deployment
+
+Given we have a model with fairly accurate prediction, we will deploy the model for the doctors to perform trial runs and receive feedback. 
